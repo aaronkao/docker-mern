@@ -1,5 +1,5 @@
-name: atlas-fargate
-description: A Pulumi program to deploy a MERN stack on Atlas and Fargate
+name: docker4
+description: A Pulumi program to deploy a MERN stack on local Docker
 runtime:
     name: python
     options:

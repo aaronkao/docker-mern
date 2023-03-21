@@ -1,14 +1,10 @@
-# MongoDB Atlas + AWS Fargate Example
-This is an example of a MERN stack deployed on AWS Fargate and MongoDB Atlas. 
+# Docker MERN App Example
+This is an example of a MERN stack deployed locally through Docker. 
 
 ![arch diagram](/architecture.png)
 
 ## Instructions
-- Export [AWS credentials](https://www.pulumi.com/registry/packages/aws/installation-configuration/)
-- Export [MongoDB Cloud credentials](https://www.pulumi.com/registry/packages/mongodbatlas/installation-configuration/)
+- Run Docker daemon
 - Initialize Pulumi stack `pulumi stack init dev`
-- Set AWS region `pulumi config set aws:region us-west-2`
-- Set MongoDB Cloud org value in Pulumi config `pulumi config set orgID [value]`
-- Set DB username in Pulumi config `pulumi config set dbUser [value]`
-- Set DB password in Pulumi config `pulumi config set dbPassword [value] --secret`
-- `pulumi up`
+- Set App URL port `pulumi config set container_port 5173`
+- Execute `pulumi up`

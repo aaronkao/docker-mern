@@ -1,147 +1,68 @@
-"""An AWS + MongoDB Cloud Python Pulumi program"""
+"""An local Docker MERN application Pulumi program"""
 
-import re
 import pulumi
 from pulumi import Output
-import pulumi_aws as aws
-import pulumi_awsx as awsx
-import pulumi_random as random
-import pulumi_mongodbatlas as mongodb
-
+import pulumi_docker as docker
 
 # Get configuration
 config = pulumi.Config()
+container_port = config.get_int("containerPort", 5173)
 
-# AWS configs
-container_port = config.get_int("containerPort", 80)
-cpu = config.get_int("cpu", 1024)
-memory = config.get_int("memory", 1024)
-
-# MongoDB Atlas configs
-db_username = config.require("dbUser")
-db_password = config.require_secret("dbPassword")
-atlas_org_id = config.require("orgID")
 
 stack = pulumi.get_stack()
 
-# An ECR repository to store our application's container images
-repo = awsx.ecr.Repository("grocery_list_repo")
+# Create Docker Network
+network = docker.Network("network", name=f"services-{stack}")
 
-# Build and publish our application from /app/frontend and /app/backend as container images to the ECR repository
-frontend_image = awsx.ecr.Image(
-    "grocery_frontend_image",
-    repository_url=repo.url,
-    path="./app/frontend")
+# Create Image from Dockerfile
+shopping_app_image = docker.Image("shopping_image",
+    build={
+        "context": "./app",
+        "dockerfile": "./Dockerfile",
+        "args": {
+            "BUILDKIT_INLINE_CACHE": "1"
+        },
+        "builder_version": "BuilderBuildKit", 
+        "platform": "linux/amd64",
+    },
+    image_name="shopping-image:latest",
+    skip_push=True
+)
 
-backend_image = awsx.ecr.Image(
-    "grocery_backend_image",
-    repository_url=repo.url,
-    path="./app/backend")
-
-# Create MongoDB Project
-mongo_project = mongodb.Project("mongo_project", org_id=atlas_org_id)
-
-# Open access to all IPs
-mongo_acl = mongodb.ProjectIpAccessList("mongo_acl",
-    cidr_block="0.0.0.0/0",
-    comment="Open access for backend",
-    project_id=mongo_project.id,)
-
-# Create Free Tier cluster
-mongo_cluster = mongodb.Cluster("mongo-cluster",
-    backing_provider_name="AWS",
-    project_id=mongo_project.id,
-    provider_instance_size_name="M0",
-    provider_name="TENANT",
-    provider_region_name="US_WEST_2")
-
-# Create Database user and give access to the cluster and database
-mongo_user = mongodb.DatabaseUser("db_user",
-    auth_database_name="admin",
-    labels=[mongodb.DatabaseUserLabelArgs(
-        key="project",
-        value="pulumi",
+# Create Container from Image
+shopping_app_container = docker.Container("shopping_app_container",
+    image=shopping_app_image.image_name,
+    ports=[{
+        "internal": container_port,
+        "external": container_port
+    }],
+    networks_advanced=[docker.ContainerNetworksAdvancedArgs(
+        name=network.name
     )],
-    password=db_password,
-    project_id=mongo_project.id,
-    roles=[
-        mongodb.DatabaseUserRoleArgs(
-            database_name="grocery-list",
-            role_name="readWrite",
-        ),
-        mongodb.DatabaseUserRoleArgs(
-            database_name="admin",
-            role_name="readAnyDatabase",
-        ),
+    envs=[
+        "DATABASE_URL=mongodb://host.docker.internal",
     ],
-    scopes=[
-        mongodb.DatabaseUserScopeArgs(
-            # Extracts the cluster name to add to database scopes
-            name=Output.all(mongo_cluster.srv_address).apply(lambda v: re.split("\.|\/\/", v[0])[1]),
-            type="CLUSTER",
-        ),
-    ],
-    username=db_username
 )
 
 
-# An ECS cluster to deploy into
-cluster = aws.ecs.Cluster("cluster")
-
-# An ALB to serve the frontend service to the internet
-lb = awsx.lb.ApplicationLoadBalancer("grocery-lb")
-
-# Deploy an ECS Service on Fargate to host the application containers
-service = awsx.ecs.FargateService(
-    "grocery-service",
-    cluster=cluster.arn,
-    assign_public_ip=True,
-    task_definition_args=awsx.ecs.FargateServiceTaskDefinitionArgs(
-        containers={
-            "front": awsx.ecs.TaskDefinitionContainerDefinitionArgs(
-                image=frontend_image.image_uri,
-                cpu=cpu,
-                memory=memory,
-                essential=True,
-                port_mappings=[awsx.ecs.TaskDefinitionPortMappingArgs(
-                    container_port=container_port,
-                    target_group=lb.default_target_group,
-                )],
-                environment=[{
-                    # Unused unless running dev server
-                    "name":"VITE_BACKEND_URL",
-                    "value":"http://localhost:8000" 
-                },
-                ],
-            ),
-            "back": awsx.ecs.TaskDefinitionContainerDefinitionArgs(
-                image=backend_image.image_uri,
-                cpu=cpu,
-                memory=memory,
-                essential=True,
-                port_mappings=[awsx.ecs.TaskDefinitionPortMappingArgs(
-                    container_port=8000,
-                    host_port=8000
-                )],
-                environment=[{
-                    "name":"DATABASE_URL",
-                    "value":Output.format("mongodb+srv://{0}:{1}@{2}", db_username, db_password, 
-                                Output.all(mongo_cluster.srv_address).apply(lambda v: v[0].split("//"))[1])
-                },
-                ],
-            ),
-        }    
-    ),
-    desired_count=1
+# Local MongoDB Community container image
+mongo_image = docker.RemoteImage("mongo_image",
+    name='mongo',
+    keep_locally=True
 )
 
-# MongoDB Atlas exports
-pulumi.export("mongo cluster id", mongo_cluster.cluster_id)
-pulumi.export("mongo url", mongo_cluster.srv_address)
-pulumi.export("mongo connection string", 
-    Output.format("mongodb+srv://{0}:{1}@{2}", db_username, db_password, 
-        Output.all(mongo_cluster.srv_address).apply(lambda v: v[0].split("//"))[1])
+# Create MongoDB container
+mongo_local_container = docker.Container("mongo_local_container",
+    image=mongo_image.latest,
+    ports=[{
+        "internal": 27017,
+        "external": 27017
+    }],
+    networks_advanced=[docker.ContainerNetworksAdvancedArgs(
+        name=network.name
+    )],
 )
-# AWS exports
-pulumi.export("app url", Output.concat("http://", lb.load_balancer.dns_name))
-pulumi.export("ecs cluster", cluster.id)
+
+# Export the URL
+pulumi.export("app url", Output.concat("http://localhost:", str(container_port)))
+
