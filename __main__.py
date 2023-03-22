@@ -18,7 +18,6 @@ network = docker.Network("network", name=f"services-{stack}")
 shopping_app_image = docker.Image("shopping_image",
     build={
         "context": "./app",
-        "dockerfile": "./Dockerfile",
         "args": {
             "BUILDKIT_INLINE_CACHE": "1"
         },
